@@ -26,6 +26,7 @@ int main(int argc, char* argv[]) {
                 cout << "Body #" << i + 1 << " force: (" << forces[i].x << ", " << forces[i].y << ")" << endl;
             }
         }
+        cout << endl;
     }
     cout << "Brute force OpenMP parallel approach (memory-intensive):" << endl;
     cout << "Using " << omp_get_max_threads() << " threads..." << endl;
@@ -39,6 +40,7 @@ int main(int argc, char* argv[]) {
             cout << "Body #" << i + 1 << " force: (" << forces[i].x << ", " << forces[i].y << ")" << endl;
         }
     }
+    cout << endl;
     cout << "Brute force OpenMP parallel approach (memory-efficient):" << endl;
     cout << "Using " << omp_get_max_threads() << " threads..." << endl;
     start = std::chrono::high_resolution_clock::now();
@@ -51,6 +53,7 @@ int main(int argc, char* argv[]) {
             cout << "Body #" << i + 1 << " force: (" << forces[i].x << ", " << forces[i].y << ")" << endl;
         }
     }
+    cout << endl;
     cout << "Brute force ParlayLib parallel approach (memory-inefficient):" << endl;
     cout << "Using " << parlay::num_workers() << " workers..." << endl;
     start = std::chrono::high_resolution_clock::now();
@@ -65,6 +68,7 @@ int main(int argc, char* argv[]) {
             cout << "Body #" << i + 1 << " force: (" << forces[i].x << ", " << forces[i].y << ")" << endl;
         }
     }
+    cout << endl;
     cout << "Brute force ParlayLib parallel approach (memory-efficient):" << endl;
     cout << "Using " << parlay::num_workers() << " workers..." << endl;
     start = std::chrono::high_resolution_clock::now();
