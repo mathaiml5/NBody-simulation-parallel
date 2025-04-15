@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
         }
     }
     cout << endl;
-    cout << "Brute force ParlayLib parallel approach (memory-inefficient):" << endl;
+    cout << "Brute force ParlayLib parallel approach (memory-intensive):" << endl;
     cout << "Using " << parlay::num_workers() << " workers..." << endl;
     start = std::chrono::high_resolution_clock::now();
     parlay::sequence<Body> bodies_parlay = parlay::to_sequence(bodies);
