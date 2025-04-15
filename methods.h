@@ -10,8 +10,10 @@
 
 std::vector<Vector2D> brute_force_seq_n_body(const std::vector<Body>& bodies);
 
-std::vector<Vector2D> brute_force_omp_n_body(const std::vector<Body>& bodies);
+std::vector<Vector2D> brute_force_omp_n_body_1(const std::vector<Body>& bodies);
+std::vector<Vector2D> brute_force_omp_n_body_2(const std::vector<Body>& bodies);
 
-parlay::sequence<Vector2D> brute_force_parlay_n_body(const parlay::sequence<Body>& bodies);
+parlay::sequence<Vector2D> brute_force_parlay_n_body_1(const parlay::sequence<Body>& bodies);
+parlay::sequence<Vector2D> brute_force_parlay_n_body_2(const parlay::sequence<Body>& bodies);
 
 #endif
