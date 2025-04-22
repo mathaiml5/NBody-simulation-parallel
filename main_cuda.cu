@@ -1,9 +1,10 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <chrono>
 #include "utils.h"
 #include <cuda_runtime.h>
-using namespace std;
+using namespace std; 
 
 struct CUDAVector2D {
     float x;
@@ -20,33 +21,10 @@ struct CUDABody {
 };
 
 // Built upon: https://developer.nvidia.com/gpugems/gpugems3/part-v-physics-simulation/chapter-31-fast-n-body-simulation-cuda
-__device__ CUDAVector2D bodyBodyInteraction(CUDABody bi, CUDABody bj, CUDAVector2D fi) {
-    float dx = bj.x - bi.x;
-    float dy = bj.y - bi.y;
-    float dist_sq = dx * dx + dy * dy;
-    float dist_cb = dist_sq * sqrtf(dist_sq);
-    float f_x = bi.mass * bj.mass * dx / dist_cb;
-    float f_y = bi.mass * bj.mass * dy / dist_cb;
-    fi.x += f_x;
-    fi.y += f_y;
-    return fi;
-}
-
-__device__ CUDAVector2D tile_calculation(CUDABody myBody, CUDAVector2D force) {
-    extern __shared__ CUDABody shBodies[];
-    #pragma unroll 4
-    for (int i = 0; i < blockDim.x; i++) {
-        if (myBody.x != shBodies[i].x || myBody.y != shBodies[i].y) {
-            force = bodyBodyInteraction(myBody, shBodies[i], force);
-        }
-    }
-    return force;
-}
-
 __global__ void calculate_forces(CUDABody *bodies, CUDAVector2D *forces, int N) {
     extern __shared__ CUDABody shBodies[];
     CUDABody myBody;
-    CUDAVector2D myForce;
+    CUDAVector2D myForce = {0.0, 0.0};
     int gtid = blockIdx.x * blockDim.x + threadIdx.x;
     if (gtid < N) {
         myBody = bodies[gtid];
@@ -58,20 +36,78 @@ __global__ void calculate_forces(CUDABody *bodies, CUDAVector2D *forces, int N) 
                 shBodies[threadIdx.x] = CUDABody(0.0f, 0.0f, 0.0f);
             }
             __syncthreads();
-            myForce = tile_calculation(myBody, myForce);
+            #pragma unroll 4
+            for (int i = 0; i < blockDim.x; i++) {
+                int j = tile * blockDim.x + i;
+                if (j != gtid && j < N) {
+                    float dx = myBody.x - shBodies[i].x;
+                    float dy = myBody.y - shBodies[i].y;
+                    float dist_sq = dx * dx + dy * dy;
+                    float dist_cb = dist_sq * sqrtf(dist_sq);
+                    float f_x = myBody.mass * shBodies[i].mass * dx / dist_cb;
+                    float f_y = myBody.mass * shBodies[i].mass * dy / dist_cb;
+                    myForce.x += f_x;
+                    myForce.y += f_y;
+                }
+            }
             __syncthreads();
         }
         forces[gtid] = myForce;
     }
 }
 
+vector<Vector2D> brute_force_seq_n_body(const vector<Body>& bodies) {
+    int N = bodies.size();
+    vector<Vector2D> forces(N);
+    for (int i = 0; i < N; i++) {
+        for (int j = i + 1; j < N; j++) {
+            // Compute values
+            double dx = bodies[j].x - bodies[i].x;
+            double dy = bodies[j].y - bodies[i].y;
+            double dist_sq = dx * dx + dy * dy;
+            if (dist_sq == 0) continue;
+            double dist_cb = dist_sq * sqrt(dist_sq);
+            // Calculate forces
+            double f_x = bodies[i].mass * bodies[j].mass * dx / dist_cb;
+            double f_y = bodies[i].mass * bodies[j].mass * dy / dist_cb;
+            forces[j].x += f_x;
+            forces[j].y += f_y;
+            forces[i].x -= f_x;
+            forces[i].y -= f_y;
+        }
+    }
+    // Apply gravitational constant
+    for (int i = 0; i < N; i++) {
+        forces[i].x *= grav;
+        forces[i].y *= grav;
+    }
+    return forces;
+}
+
 #define BLOCK_SIZE 256
 
 int main(int argc, char* argv[]) {
-    // CUDA 
     int N = argc > 1 ? stoi(argv[1]) : 1e5;
     vector<Body> bodies = generate_random_bodies(N);
-    int print_total = 3;
+    vector<Vector2D> forces(N);
+    int print_total = 10;
+    // Baseline
+    cout << "Calculate gravitational forces between " << N << " random bodies:" << endl;
+    if (falseg) {
+        cout << "Brute force O(n^2) sequential approach:" << endl;
+        auto start = std::chrono::high_resolution_clock::now();
+        forces = brute_force_seq_n_body(bodies);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        cout << "Time taken: " << duration.count() / 1e6 << " s" << endl;
+        for (int i = 0; i < N; i++) {
+            if (print_total && (i + 1) % (N / print_total) == 0) {
+                cout << "Body #" << i + 1 << " force: (" << forces[i].x << ", " << forces[i].y << ")" << endl;
+            }
+        }
+        cout << endl;
+    }
+    // CUDA 
     cout << "Brute force CUDA parallel approach:" << endl;
     CUDABody *h_bodies = new CUDABody[N];
     CUDAVector2D *h_forces = new CUDAVector2D[N];
@@ -92,12 +128,16 @@ int main(int argc, char* argv[]) {
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
     cudaMemcpy(h_forces, d_forces, N * sizeof(CUDAVector2D), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < N; i++) {
+        forces[i].x = (double) h_forces[i].x * grav;
+        forces[i].y = (double) h_forces[i].y * grav;
+    }
     float elapsedTime;
     cudaEventElapsedTime(&elapsedTime, start, stop);
-    cout << "Time taken: " << elapsedTime << " s" << endl;
+    cout << "Time taken: " << elapsedTime / 1000 << " s" << endl;
     for (int i = 0; i < N; i++) {
         if (print_total && (i + 1) % (N / print_total) == 0) {
-            cout << "Body #" << i + 1 << " force: (" << h_forces[i].x << ", " << h_forces[i].y << ")" << endl;
+            cout << "Body #" << i + 1 << " force: (" << forces[i].x << ", " << forces[i].y << ")" << endl;
         }
     }
     delete[] h_bodies;
