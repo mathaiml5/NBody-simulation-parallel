@@ -11,3 +11,5 @@ in_pr.txt
 barnes_hut/*
 nbody-sim-new/results/*.csv
 nbody-sim-new/results/*.out
+nbody-sim-old/*
+rename-*.sh

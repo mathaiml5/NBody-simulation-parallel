@@ -55,6 +55,6 @@ public:
     std::vector<Vector<D>> calculate_forces(const std::vector<Body<D>>& bodies);
 };
 
-#include "fmm_omp.tpp"
+#include "fmm_omp.cpp"
 
 #endif // FMM_OMP_H

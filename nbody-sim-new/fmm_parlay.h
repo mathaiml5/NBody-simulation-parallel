@@ -55,6 +55,6 @@ private:
     int order;
 };
 
-#include "fmm_parlay.tpp"
+#include "fmm_parlay.cpp"
 
 #endif // FMM_PARLAY_H
