@@ -1,0 +1,15 @@
+*.obj
+*.o
+*.exe
+*.out
+*.dSYM
+*.DS_Store
+nbody-sim-new/*sample*.h
+nbody-sim-new/*sample*.cpp
+nbody-sim-new/*Spec*
+in_pr.txt
+barnes_hut/*
+nbody-sim-new/results/*.csv
+nbody-sim-new/results/*.out
+nbody-sim-old/*
+rename-*.sh
