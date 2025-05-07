@@ -171,6 +171,16 @@ The CSV format includes:
 - **Parallel scans and sorts** for efficient tree construction
 - **Lock-free data structures** to reduce contention
 
+### Global Config Parameters
+Following parameters are provided at the top of `utils.h` to fine tune and adjust performance 
+- `const double G = 6.67430e-11;` Gravitational constant: Default value is when using units of kg, m, s for mass, distance, and time. If using other mass units such as solar or earth mass or other distances units such as parsec this constant will need to be adjusted
+- `const double BARNES_HUT_THETA = 0.25;` Barnes-Hut approximation parameter: values closer to zero yield better accuracy. 
+- `const double EPSILON = 1e-11;`  Small value threshold to avoid division by zero errors
+- `const double SOFTENING = 1e-6;`  Softening parameter for close interactions
+- `const double ACCURACY_PCT_THRESHOLD = 0.01;`  Threshold % for accuracy: if calculated value from simulation is within 1% of reference value (for example, force from an accurate brute force calculation) it is deemed accurate
+- `const double ACCURACY_FORCE_THRESHOLD = 1e-20;` 
+Set this threshold below which force values are not considered accurate, otherwise it might lead to instability.
+
 ## Known Limitations
 
 - Very large simulations (N > 10M) may require significant memory
