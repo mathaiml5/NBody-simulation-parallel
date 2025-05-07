@@ -16,9 +16,15 @@ template <int D> class FMM;
 #include "octree.h"
 #include "bvh.h"
 #include "fmm.h"
+#include "fmm_omp.h"
+#include "fmm_parlay.h"
 #include <parlay/sequence.h>
 #include <parlay/parallel.h>
 #include <parlay/primitives.h>
+
+#define FMM_ORDER 16
+#define FMM_MAX_BODIES_PER_LEAF 100
+#define FMM_MAX_LEVEL 32
 
 // Brute force implementations
 template <int D>
@@ -59,21 +65,21 @@ parlay::sequence<Vector<D>> bvh_parlay_n_body(const parlay::sequence<Body<D>>& b
 // FMM implementations
 template <int D>
 std::vector<Vector<D>> fmm_seq_n_body(const std::vector<Body<D>>& bodies, 
-                                     int max_bodies_per_leaf = 64, 
-                                     int max_level = 6, 
-                                     int order = 10);
+                                     int max_bodies_per_leaf = FMM_MAX_BODIES_PER_LEAF, 
+                                     int max_level = FMM_MAX_LEVEL, 
+                                     int order = FMM_ORDER);
 
 template <int D>
 std::vector<Vector<D>> fmm_omp_n_body(const std::vector<Body<D>>& bodies, 
-                                     int max_bodies_per_leaf = 64, 
-                                     int max_level = 6, 
-                                     int order = 10);
+                                     int max_bodies_per_leaf = FMM_MAX_BODIES_PER_LEAF, 
+                                     int max_level = FMM_MAX_LEVEL, 
+                                     int order = FMM_ORDER);
 
 template <int D>
 parlay::sequence<Vector<D>> fmm_parlay_n_body(const parlay::sequence<Body<D>>& bodies,
-                                            int max_bodies_per_leaf = 64, 
-                                            int max_level = 6, 
-                                            int order = 10);
+                                            int max_bodies_per_leaf = FMM_MAX_BODIES_PER_LEAF, 
+                                            int max_level = FMM_MAX_LEVEL, 
+                                            int order = FMM_ORDER);
 
 // Helpers to update positions and velocities
 template <int D>

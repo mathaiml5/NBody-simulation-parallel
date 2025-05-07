@@ -14,10 +14,16 @@
 #include "vector.h"
 #include "body.h"
 #include <parlay/sequence.h>
+#include <parlay/parallel.h>  // For parlay::parallel_for
+#include <parlay/primitives.h>  // For parlay::reduce
 
 // Physical constants
 const double G = 6.67430e-11;  // Gravitational constant
 const double BARNES_HUT_THETA = 0.25;  // Barnes-Hut approximation parameter
+const double EPSILON = 1e-11;  // Small value to avoid division by zero
+const double SOFTENING = 1e-6;  // Softening parameter for close interactions
+const double ACCURACY_PCT_THRESHOLD = 0.01;  // Threshold % for accuracy: if value is within 1% it is accurate
+const double ACCURACY_FORCE_THRESHOLD = 1e-20;  // Force threshold for accuracy checks
 
 // Complex number utilities
 inline std::complex<double> to_complex(const Vector<2>& v) {
@@ -67,8 +73,10 @@ inline std::string get_run_id() {
         << std::setw(2) << (tm_now->tm_mon + 1)     // month (0-based)
         << std::setw(2) << tm_now->tm_mday          // day
         << std::setw(4) << (tm_now->tm_year + 1900) // year
+        << "_"
         << std::setw(2) << tm_now->tm_hour          // hour
-        << std::setw(2) << tm_now->tm_min;          // minute
+        << std::setw(2) << tm_now->tm_min           // minute
+        << std::setw(2) << tm_now->tm_sec;          // second
     
     return oss.str();
 }
@@ -155,6 +163,113 @@ inline void print_validation_forces(const parlay::sequence<Vector<D>>& forces, i
             out << ")" << std::endl;
         }
     }
+}
+
+// Optimized OpenMP version of accuracy computation for large datasets
+template <int D>
+inline double compute_accuracy_omp(const std::vector<Vector<D>>& forces, 
+                               const std::vector<Vector<D>>& reference_forces) {
+    if (forces.size() != reference_forces.size()) {
+        std::cerr << "Error: Force vector sizes do not match for accuracy calculation." << std::endl;
+        return 0.0;
+    }
+    
+    const size_t n = forces.size();
+    std::vector<int> accurate_flags(n, 0);
+    const double accuracy_threshold = ACCURACY_PCT_THRESHOLD; // 1% accuracy threshold
+    
+    #pragma omp parallel for
+    for (size_t i = 0; i < n; ++i) {
+        bool is_accurate = true;
+        
+        for (int d = 0; d < D; ++d) {
+            double ref_force = reference_forces[i][d];
+            double force = forces[i][d];
+            
+            // Skip near-zero forces to avoid division by small numbers
+            if (std::abs(ref_force) < ACCURACY_FORCE_THRESHOLD) {
+                // For very small forces, check absolute error instead
+                if (std::abs(force) > 1e-9) {
+                    is_accurate = false;
+                    break;
+                }
+                continue;
+            }
+            
+            double relative_error = std::abs((force - ref_force) / ref_force);
+            if (relative_error > accuracy_threshold) {
+                is_accurate = false;
+                break;
+            }
+        }
+        
+        if (is_accurate) {
+            accurate_flags[i] = 1;
+        }
+    }
+    
+    // Count accurate bodies
+    int accurate_count = 0;
+    for (size_t i = 0; i < n; ++i) {
+        accurate_count += accurate_flags[i];
+    }
+    
+    return 100.0 * accurate_count / n; // Return percentage
+}
+
+// Optimized ParlayLib version of accuracy computation for large datasets
+template <int D>
+inline double compute_accuracy_parlay_opt(const parlay::sequence<Vector<D>>& forces, 
+                                     const parlay::sequence<Vector<D>>& reference_forces) {
+    if (forces.size() != reference_forces.size()) {
+        std::cerr << "Error: Force vector sizes do not match for accuracy calculation." << std::endl;
+        return 0.0;
+    }
+    
+    const size_t n = forces.size();
+    const double accuracy_threshold = ACCURACY_PCT_THRESHOLD; // 1% accuracy threshold
+    
+    // Create a sequence to store accuracy flags using parallel_for
+    parlay::sequence<int> accurate_flags(n);
+    
+    parlay::parallel_for(0, n, [&](size_t i) {
+        bool is_accurate = true;
+        
+        for (int d = 0; d < D; ++d) {
+            double ref_force = reference_forces[i][d];
+            double force = forces[i][d];
+            
+            // Skip near-zero forces to avoid division by small numbers
+            if (std::abs(ref_force) < ACCURACY_FORCE_THRESHOLD) {
+                // For very small forces, check absolute error instead
+                if (std::abs(force) > 1e-9) {
+                    is_accurate = false;
+                    break;
+                }
+                continue;
+            }
+            
+            double relative_error = std::abs((force - ref_force) / ref_force);
+            if (relative_error > accuracy_threshold) {
+                is_accurate = false;
+                break;
+            }
+        }
+        
+        accurate_flags[i] = is_accurate ? 1 : 0;
+    });
+    
+    // Count accurate bodies using reduce
+    int accurate_count = parlay::reduce(accurate_flags, parlay::plus<int>());
+    
+    return 100.0 * accurate_count / n; // Return percentage
+}
+
+// For backward compatibility, define compute_accuracy
+template <int D>
+inline double compute_accuracy(const std::vector<Vector<D>>& forces, 
+                           const std::vector<Vector<D>>& reference_forces) {
+    return compute_accuracy_omp<D>(forces, reference_forces);
 }
 
 #endif // UTILS_H

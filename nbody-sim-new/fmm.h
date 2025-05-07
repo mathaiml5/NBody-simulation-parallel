@@ -110,7 +110,7 @@ public:
 // Main FMM class
 template <int D>
 class FMM {
-public:  // Changed: making these methods public instead of private
+public:
     std::unique_ptr<FMMNode<D>> root;
     int max_bodies_per_leaf;
     int max_level;
@@ -131,7 +131,6 @@ public:  // Changed: making these methods public instead of private
     // Calculate forces using FMM
     std::vector<Vector<D>> calculate_forces(const std::vector<Body<D>>& bodies);
     
-    // Now make these methods public so they can be called from methods.cpp
     // The upward pass: P2M and M2M
     void upward_pass();
     
@@ -140,6 +139,9 @@ public:  // Changed: making these methods public instead of private
     
     // The downward pass: L2L and L2P
     void downward_pass(std::vector<Vector<D>>& forces, const std::vector<Body<D>>& bodies);
+    
+    // Calculate force on a single body using improved accuracy method
+    Vector<D> calculate_accurate_force(const Body<D>& body);
 
 private:
     // Recursively build interaction lists

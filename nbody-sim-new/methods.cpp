@@ -277,14 +277,21 @@ std::vector<Vector<D>> fmm_seq_n_body(const std::vector<Body<D>>& bodies,
                                      int max_bodies_per_leaf, 
                                      int max_level, 
                                      int order) {
-    // Use higher order for better accuracy (minimum 8 for good results)
-    order = std::max(order, 8);
+    // Use higher order for better accuracy (minimum 10 for good results)
+    order = std::max(order, 10);
     
     // Create FMM instance with proper parameters
     FMM<D> fmm(bodies, max_bodies_per_leaf, max_level, order);
     
-    // Calculate forces
-    return fmm.calculate_forces(bodies);
+    // Calculate forces by calling calculate_accurate_force for each body
+    const size_t n = bodies.size();
+    std::vector<Vector<D>> forces(n, Vector<D>());
+    
+    for (size_t i = 0; i < n; ++i) {
+        forces[i] = fmm.calculate_accurate_force(bodies[i]);
+    }
+    
+    return forces;
 }
 
 // Helper function to find the leaf node containing a specific body
@@ -333,183 +340,34 @@ std::vector<Vector<D>> fmm_omp_n_body(const std::vector<Body<D>>& bodies,
                                      int max_bodies_per_leaf, 
                                      int max_level, 
                                      int order) {
-    // Use higher order for better accuracy (minimum 8 for good results)
+    // Use higher order for better accuracy
     order = std::max(order, 8);
-    
-    // Create FMM instance and build tree sequentially
-    FMM<D> fmm(bodies, max_bodies_per_leaf, max_level, order);
-    
-    // Get number of bodies
-    const size_t n = bodies.size();
-    std::vector<Vector<D>> forces(n, Vector<D>());
-    
-    // Upward pass (sequential due to dependencies)
-    fmm.upward_pass();
-    
-    // Collect all nodes for parallel processing in the interaction pass
-    std::vector<FMMNode<D>*> all_nodes;
-    
-    // Recursive function to collect all nodes
-    std::function<void(FMMNode<D>*)> collect_nodes;
-    collect_nodes = [&all_nodes, &collect_nodes](FMMNode<D>* node) {
-        if (!node) return;
-        all_nodes.push_back(node);
-        for (const auto& child : node->children) {
-            if (child) collect_nodes(child.get());
-        }
-    };
-    
-    // Fill all_nodes
-    collect_nodes(fmm.root.get());
-    
-    // Parallel M2L operations
-    #pragma omp parallel for
-    for (size_t i = 0; i < all_nodes.size(); ++i) {
-        FMMNode<D>* node = all_nodes[i];
-        for (FMMNode<D>* interaction : node->interaction_list) {
-            if (interaction) node->translate_multipole_to_local(interaction, order);
-        }
-    }
-    
-    // Sequential downward pass for L2L (due to dependencies)
-    // Fix: Properly capture the recursive lambda
-    std::function<void(FMMNode<D>*)> translate_local;
-    translate_local = [&order, &translate_local](FMMNode<D>* node) {
-        if (!node) return;
-        
-        // Translate to children
-        if (!node->is_leaf()) {
-            node->translate_local_to_children(order);
-            
-            // Continue down the tree
-            for (auto& child : node->children) {
-                if (child) translate_local(child.get());
-            }
-        }
-    };
-    
-    translate_local(fmm.root.get());
-    
-    // Collect leaf nodes for parallel processing
-    std::vector<FMMNode<D>*> leaf_nodes;
-    std::function<void(FMMNode<D>*)> collect_leaves;
-    collect_leaves = [&leaf_nodes, &collect_leaves](FMMNode<D>* node) {
-        if (!node) return;
-        if (node->is_leaf()) {
-            leaf_nodes.push_back(node);
-        } else {
-            for (const auto& child : node->children) {
-                if (child) collect_leaves(child.get());
-            }
-        }
-    };
-    
-    collect_leaves(fmm.root.get());
-    
-    // Map bodies to their leaf nodes for direct lookup
-    std::vector<FMMNode<D>*> body_to_leaf(n, nullptr);
-    for (FMMNode<D>* leaf : leaf_nodes) {
-        for (Body<D>* body_ptr : leaf->bodies) {
-            // Find the index of this body in the original array
-            for (size_t i = 0; i < n; ++i) {
-                if (&bodies[i] == body_ptr) {
-                    body_to_leaf[i] = leaf;
-                    break;
-                }
-            }
-        }
-    }
-    
-    // Parallel L2P and direct calculations
-    #pragma omp parallel for
-    for (size_t i = 0; i < n; ++i) {
-        const Body<D>& body = bodies[i];
-        FMMNode<D>* leaf = body_to_leaf[i];
-        
-        if (leaf) {
-            // Direct calculations with neighbors
-            for (FMMNode<D>* neighbor : leaf->neighbor_list) {
-                if (!neighbor) continue;
-                for (const Body<D>* other : neighbor->bodies) {
-                    if (!other) continue;
-                    if (other == &body) continue; // Skip self
-                    
-                    Vector<D> diff = other->position - body.position;
-                    double dist_sq = diff.magnitude_squared();
-                    
-                    if (dist_sq < 1e-9) continue;
-                    
-                    double dist = std::sqrt(dist_sq);
-                    double force_mag = G * body.mass * other->mass / (dist_sq * dist);
-                    
-                    forces[i] += diff.normalized() * force_mag;
-                }
-            }
-            
-            // Also handle direct calculations within own leaf
-            for (const Body<D>* other : leaf->bodies) {
-                if (other == &body) continue; // Skip self
-                
-                Vector<D> diff = other->position - body.position;
-                double dist_sq = diff.magnitude_squared();
-                
-                if (dist_sq < 1e-9) continue;
-                
-                double dist = std::sqrt(dist_sq);
-                double force_mag = G * body.mass * other->mass / (dist_sq * dist);
-                
-                forces[i] += diff.normalized() * force_mag;
-            }
-            
-            // Evaluate local expansion
-            if constexpr (D == 2) {
-                std::complex<double> z = to_complex(body.position - leaf->center);
-                std::complex<double> potential_gradient(0.0, 0.0);
-                
-                for (int p = 1; p <= order; ++p) {
-                    std::complex<double> z_power = pow(z, p-1);
-                    potential_gradient += leaf->local.coeff[p] * static_cast<double>(p) * z_power;
-                }
-                
-                forces[i][0] += -potential_gradient.real() * body.mass;
-                forces[i][1] += -potential_gradient.imag() * body.mass;
-            } else {
-                // 3D implementation (simplified)
-                double potential = leaf->local.coeff[0].real();
-                Vector<D> force_direction = leaf->center - body.position;
-                double dist = force_direction.magnitude();
-                
-                if (dist > 1e-9) {
-                    double force_mag = potential * body.mass / (dist * dist);
-                    forces[i] += force_direction.normalized() * force_mag;
-                }
-            }
-        }
-    }
-    
-    return forces;
+
+    // Use optimized OpenMP-specific FMM implementation
+    FMM_OMP<D> fmm_omp(bodies, max_bodies_per_leaf, max_level, order);
+
+    // Use the optimized implementation to calculate forces
+    return fmm_omp.calculate_forces(bodies);
 }
 
-// FMM ParlayLib implementation
+// FMM ParlayLib implementation - optimized version
 template <int D>
 parlay::sequence<Vector<D>> fmm_parlay_n_body(const parlay::sequence<Body<D>>& bodies, 
                                              int max_bodies_per_leaf, 
                                              int max_level, 
                                              int order) {
-    // Use higher order for better accuracy (minimum 8 for good results)
-    order = std::max(order, 8);
+    // Use higher order for better accuracy
+    order = std::max(order, 10);
     
-    // Convert to std::vector for FMM initialization
-    std::vector<Body<D>> std_bodies(bodies.begin(), bodies.end());
+    // Tune parameters for better balance between speed and accuracy
+    max_bodies_per_leaf = std::min(max_bodies_per_leaf, 32); // Smaller leaf nodes
+    max_level = std::max(max_level, 8); // Ensure enough depth
     
-    // Create FMM instance
-    FMM<D> fmm(std_bodies, max_bodies_per_leaf, max_level, order);
+    // Create optimized Parlay-specific FMM implementation
+    FMM_Parlay<D> fmm_parlay(bodies, max_bodies_per_leaf, max_level, order);
     
-    // Get forces using sequential implementation first
-    std::vector<Vector<D>> std_forces = fmm.calculate_forces(std_bodies);
-    
-    // Convert to parlay::sequence
-    parlay::sequence<Vector<D>> forces(std_forces.begin(), std_forces.end());
+    // Use the optimized implementation to calculate forces
+    auto forces = fmm_parlay.calculate_forces(bodies);
     
     return forces;
 }

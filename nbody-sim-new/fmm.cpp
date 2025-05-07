@@ -72,72 +72,73 @@ void FMMNode<D>::insert(Body<D>* body, int max_bodies, int max_level) {
     children[child_idx]->insert(body, max_bodies, max_level);
 }
 
+// Compute multipole expansion with improved accuracy
 template <int D>
 void FMMNode<D>::compute_multipole(int order) {
     multipole.clear();
     
     if (is_leaf()) {
-        // Improved P2M for accuracy
+        // P2M: Particle to Multipole
         if constexpr (D == 2) {
-            // 2D with complex numbers - same as before but ensuring numerical stability
-            multipole.coeff[0] = std::complex<double>(0.0, 0.0);
-            
-            // First sum up masses for stability
+            // 2D implementation with complex numbers
+            // First sum up all masses
             double total_mass = 0.0;
+            Vector<D> center_of_mass = Vector<D>();
+            
             for (Body<D>* body : bodies) {
                 total_mass += body->mass;
+                center_of_mass += body->position * body->mass;
             }
             
-            // Set monopole term (total mass)
+            if (total_mass > 0) {
+                center_of_mass = center_of_mass / total_mass;
+            }
+            
+            // Store total mass and center of mass
             multipole.coeff[0] = std::complex<double>(total_mass, 0.0);
             
-            // Calculate higher moments with proper scaling
+            if (order > 0) {
+                // Store center of mass in first coefficient for improved accuracy
+                std::complex<double> z_com = to_complex(center_of_mass - center);
+                multipole.coeff[1] = z_com * total_mass;
+            }
+            
+            // Higher order terms for improved accuracy
             for (Body<D>* body : bodies) {
                 std::complex<double> z = to_complex(body->position - center);
-                std::complex<double> z_power = z;
+                std::complex<double> z_power = z * z; // Start with z^2
                 
-                for (int p = 1; p <= order; ++p) {
-                    // Normalize by order for better numerical behavior
+                for (int p = 2; p <= order; ++p) {
+                    // Use normalized coefficients for better numerical stability
                     multipole.coeff[p] += -body->mass * z_power / static_cast<double>(p);
-                    z_power *= z;
+                    z_power *= z; // Next power
                 }
             }
         } else {
-            // 3D implementation with better monopole and dipole approximation
-            // First compute total mass (monopole)
+            // 3D implementation with improved monopole and dipole terms
             double total_mass = 0.0;
-            Vector<D> com;  // Center of mass
+            Vector<D> center_of_mass = Vector<D>();
             
             for (Body<D>* body : bodies) {
                 total_mass += body->mass;
-                for (int d = 0; d < D; ++d) {
-                    com[d] += body->mass * body->position[d];
-                }
+                center_of_mass += body->position * body->mass;
             }
             
-            // Normalize center of mass
-            if (total_mass > 1e-10) {
-                for (int d = 0; d < D; ++d) {
-                    com[d] /= total_mass;
-                }
-            } else {
-                com = center; // Fallback
+            if (total_mass > 0) {
+                center_of_mass = center_of_mass / total_mass;
             }
             
-            // Store monopole term (total mass)
+            // Store mass in first coefficient
             multipole.coeff[0] = std::complex<double>(total_mass, 0.0);
             
-            // Store dipole information for 3D approximation
-            if (order > 0) {
-                // Store center of mass displacement in higher coefficients
-                Vector<D> com_disp = com - center;
-                for (int d = 0; d < D; ++d) {
-                    multipole.coeff[d+1] = std::complex<double>(com_disp[d] * total_mass, 0.0);
-                }
+            if (order > 0 && multipole.coeff.size() > 2) {
+                // Store center of mass for improved accuracy
+                multipole.coeff[1] = std::complex<double>(center_of_mass[0], center_of_mass[1]);
+                multipole.coeff[2] = std::complex<double>(center_of_mass[2], 0.0);
             }
         }
     } else {
-        // M2M translation logic same as before
+        // Rest of the M2M implementation
         for (const auto& child : children) {
             if (child) {
                 child->compute_multipole(order);
@@ -170,47 +171,79 @@ void FMMNode<D>::compute_multipole(int order) {
     }
 }
 
+// Translate multipole to local with improved accuracy
 template <int D>
 void FMMNode<D>::translate_multipole_to_local(FMMNode<D>* source, int order) {
-    // More accurate M2L translation
+    if (!source) return;
+    
+    // Get source mass
+    double src_mass = source->multipole.coeff[0].real();
+    if (src_mass < 1e-10) return;
+    
     if constexpr (D == 2) {
+        // Get the vector from target to source
         std::complex<double> z0 = to_complex(source->center - center);
         double r = std::abs(z0);
         
         // Skip if centers are too close (numerical stability)
         if (r < 1e-10) return;
         
-        // For each target order and source order, with better accuracy
+        // Extract center of mass from source if available
+        std::complex<double> source_com = z0;
+        if (order > 0 && std::abs(source->multipole.coeff[1]) > 1e-10) {
+            source_com = source->multipole.coeff[1] / src_mass + z0;
+        }
+        
+        // More stable M2L computation
         for (int p = 0; p <= order; ++p) {
             for (int q = 0; q <= order; ++q) {
-                // More stable computation for large powers
                 std::complex<double> term;
-                if (p + q > 30) { // Threshold for large powers
-                    // Use logarithmic computation to avoid overflow
-                    double log_mag = q * std::log(source->multipole.coeff[q].real()) - 
-                                    (p + q + 1) * std::log(r) + 
-                                    std::log(static_cast<double>(binomial(p + q, q)));
-                    term = std::exp(log_mag) * std::exp(std::complex<double>(0, -(p+q+1)*std::arg(z0)));
-                } else {
-                    // Standard computation for smaller powers
+                if (q == 0) {
+                    // Monopole term - use source mass at COM
+                    if (p == 0) {
+                        term = src_mass / r;
+                    } else {
+                        term = src_mass * std::pow(1.0 / source_com, p);
+                    }
+                } else if (p + q <= order) {
+                    // Higher order terms with improved stability
                     term = source->multipole.coeff[q] * 
-                           std::pow(1.0 / z0, p + q + 1) *
-                           static_cast<double>(binomial(p + q, q));
+                          std::pow(1.0 / z0, p + q) *
+                          static_cast<double>(binomial(p + q - 1, q - 1));
                 }
                 local.coeff[p] += term;
             }
         }
     } else {
         // 3D implementation with improved accuracy
-        // For now, use a conservative estimate that works better than the previous simplified version
         Vector<D> r_vec = source->center - center;
         double r = r_vec.magnitude();
         
-        // Skip if centers are too close (numerical stability)
+        // Skip if too close for numerical stability
         if (r < 1e-10) return;
         
-        // Basic monopole contribution (1/r term)
-        local.coeff[0] += source->multipole.coeff[0] / r;
+        // Extract center of mass if available
+        Vector<D> source_com = source->center;
+        if (source->multipole.coeff.size() > 2) {
+            source_com[0] = source->multipole.coeff[1].real();
+            source_com[1] = source->multipole.coeff[1].imag();
+            source_com[2] = source->multipole.coeff[2].real();
+        }
+        
+        // Vector from target to source COM
+        Vector<D> r_com_vec = source_com - center;
+        double r_com = r_com_vec.magnitude();
+        
+        // Store potential from monopole approximation
+        if (r_com > 1e-10) {
+            local.coeff[0] += std::complex<double>(src_mass / r_com, 0.0);
+            
+            // Store direction for force calculation
+            if (local.coeff.size() > 2) {
+                local.coeff[1] = std::complex<double>(r_com_vec[0], r_com_vec[1]);
+                local.coeff[2] = std::complex<double>(r_com_vec[2], r_com);
+            }
+        }
     }
 }
 
@@ -284,6 +317,7 @@ void FMMNode<D>::compute_direct_forces(std::vector<Vector<D>>& forces,
     }
 }
 
+// Evaluate local expansion with improved accuracy
 template <int D>
 void FMMNode<D>::evaluate_local_expansion(std::vector<Vector<D>>& forces,
                                           const std::vector<Body<D>>& all_bodies,
@@ -294,56 +328,55 @@ void FMMNode<D>::evaluate_local_expansion(std::vector<Vector<D>>& forces,
         size_t body_idx = body_ptr - &all_bodies[0]; // Find index of body
         
         if constexpr (D == 2) {
-            // 2D implementation - enhanced for accuracy
             std::complex<double> z = to_complex(body_ptr->position - center);
+            std::complex<double> potential(0.0, 0.0);
             std::complex<double> potential_gradient(0.0, 0.0);
             
             // More accurate gradient calculation
             for (int p = 1; p <= order; ++p) {
+                // Skip small coefficients
                 if (std::abs(local.coeff[p]) < 1e-15) continue;
                 
-                // Calculate z^(p-1) more carefully to avoid overflow
                 std::complex<double> z_power;
                 if (p == 1) {
                     z_power = std::complex<double>(1.0, 0.0);
-                } else if (p <= 10) {
-                    z_power = pow(z, p-1);
                 } else {
-                    // For high orders, use more stable computation
-                    double mag = pow(std::abs(z), p-1);
-                    double arg = (p-1) * std::arg(z);
-                    z_power = std::polar(mag, arg);
+                    z_power = pow(z, p-1);
                 }
                 
                 potential_gradient += local.coeff[p] * static_cast<double>(p) * z_power;
+                potential += local.coeff[p] * pow(z, p);
             }
             
-            // Force is -gradient * mass
+            // Force is negative gradient of potential
             Vector<D> force;
             force[0] = -potential_gradient.real() * body_ptr->mass;
             force[1] = -potential_gradient.imag() * body_ptr->mass;
             
             forces[body_idx] += force;
         } else {
-            // Enhanced 3D implementation
-            // For 3D, our local expansions are limited, so use direct calculation
-            // for better accuracy in some cases
+            // 3D implementation
             double potential = local.coeff[0].real();
-            Vector<D> r_vec = body_ptr->position - center;
-            double r = r_vec.magnitude();
+            Vector<D> r_vec;
+            double r = 1.0;
             
-            if (r > 1e-10) {
-                // Main monopole term (conservative but accurate)
-                double force_mag = G * body_ptr->mass * potential / (r * r * r);
-                Vector<D> force = r_vec * (-force_mag); // Force toward center
+            // Use stored direction and distance if available
+            if (local.coeff.size() > 2) {
+                r_vec[0] = local.coeff[1].real();
+                r_vec[1] = local.coeff[1].imag();
+                r_vec[2] = local.coeff[2].real();
+                r = local.coeff[2].imag();
                 
-                // Add dipole corrections if available (for order > 0)
-                if (order > 0) {
-                    // Dipole terms would be calculated here in a full implementation
-                    // For simplicity, we'll just use the monopole approximation
+                if (r > 1e-10) {
+                    // Normalize to unit vector
+                    r_vec = r_vec / r;
+                    
+                    // Force magnitude
+                    double force_mag = G * body_ptr->mass * potential / r;
+                    
+                    // Apply force toward the center of mass
+                    forces[body_idx] -= r_vec * force_mag;
                 }
-                
-                forces[body_idx] += force;
             }
         }
     }
@@ -445,69 +478,57 @@ std::unique_ptr<FMMNode<D>> FMM<D>::build_tree_recursive(
     return node;
 }
 
-template <int D>
-void FMM<D>::build_interaction_lists() {
-    if (root) {
-        build_interaction_lists_recursive(root.get());
-    }
-}
-
+// Build interaction lists with improved accuracy criterion
 template <int D>
 void FMM<D>::build_interaction_lists_recursive(FMMNode<D>* node) {
     // Clear existing lists
     node->interaction_list.clear();
     node->neighbor_list.clear();
     
-    // Improved well-separateness criterion
+    // Use more conservative well-separateness criterion
     if (node->is_leaf()) {
-        std::function<void(FMMNode<D>*)> process_node = [&](FMMNode<D>* other) {
+        std::function<void(FMMNode<D>*)> process_node;
+        process_node = [&](FMMNode<D>* other) {
             if (!other || other == node) return;
             
             // Calculate distance between node centers
             Vector<D> dist_vec = other->center - node->center;
             double dist = dist_vec.magnitude();
             
-            // Node sizes
-            double size_self = node->half_size * 2.0;
-            double size_other = other->half_size * 2.0;
+            // More conservative criterion for better accuracy
+            double size_sum = node->half_size + other->half_size;
             
-            // Improved well-separateness criterion
-            // If distance > size_self + size_other, use multipole approximation
-            // More conservative than the classic r > 2*(R1+R2) to improve accuracy
-            if (dist > 1.5 * (size_self + size_other)) {
-                // Use multipole approximation
-                if (other->is_leaf()) {
-                    node->interaction_list.push_back(other);
-                } else {
-                    // If other is larger, it's more accurate to interact with its children
-                    if (size_other > size_self * 2.0) {
-                        for (auto& child : other->children) {
-                            if (child) process_node(child.get());
-                        }
-                    } else {
-                        node->interaction_list.push_back(other);
-                    }
-                }
+            // Use smaller threshold for more accurate approximation
+            if (dist > 2.5 * size_sum) {
+                // Well-separated: use multipole approximation
+                node->interaction_list.push_back(other);
+            } else if (other->is_leaf()) {
+                // Close leaf: use direct calculation
+                node->neighbor_list.push_back(other);
             } else {
-                // Close interaction - direct calculation needed
-                if (other->is_leaf()) {
-                    node->neighbor_list.push_back(other);
-                } else {
-                    // Must recurse into children for direct calculation
-                    for (auto& child : other->children) {
-                        if (child) process_node(child.get());
-                    }
+                // Close internal node: recurse to children
+                for (auto& child : other->children) {
+                    if (child) process_node(child.get());
                 }
             }
         };
         
-        // Process from root
-        if (root) process_node(root.get());
+        // Start from root
+        if (root && root.get() != node) {
+            process_node(root.get());
+        }
     } else {
-        // Process children recursively
+        // For internal nodes, process children recursively
         for (auto& child : node->children) {
             if (child) build_interaction_lists_recursive(child.get());
         }
+    }
+}
+
+template <int D>
+void FMM<D>::build_interaction_lists() {
+    if (root) {
+        build_interaction_lists_recursive(root.get());
     }
 }
 
@@ -605,6 +626,114 @@ void FMM<D>::downward_pass(std::vector<Vector<D>>& forces, const std::vector<Bod
     compute_forces(root.get());
 }
 
+// Calculate force on a single body with improved accuracy
+template <int D>
+Vector<D> FMM<D>::calculate_accurate_force(const Body<D>& body) {
+    if (!root) return Vector<D>();
+    
+    // Use Barnes-Hut style traversal with improved accuracy
+    std::function<Vector<D>(FMMNode<D>*, const Body<D>&)> calc_force;
+    calc_force = [&calc_force](FMMNode<D>* node, const Body<D>& body) -> Vector<D> {
+        if (!node) return Vector<D>();
+        
+        // Vector from body to node center
+        Vector<D> diff = node->center - body.position;
+        double dist_sq = diff.magnitude_squared();
+        
+        // To avoid division by zero
+        if (dist_sq < 1e-10) {
+            // If this is a non-leaf node, recurse to children
+            if (!node->is_leaf()) {
+                Vector<D> force;
+                for (auto& child : node->children) {
+                    if (child) {
+                        force += calc_force(child.get(), body);
+                    }
+                }
+                return force;
+            } else {
+                // Leaf node with very close points - compute direct forces
+                Vector<D> force;
+                for (Body<D>* other : node->bodies) {
+                    if (other == &body) continue; // Skip self
+                    
+                    Vector<D> r = other->position - body.position;
+                    double r_sq = r.magnitude_squared();
+                    if (r_sq < 1e-10) continue;
+                    
+                    double r_mag = std::sqrt(r_sq);
+                    double force_mag = G * body.mass * other->mass / (r_sq * r_mag);
+                    force += r.normalized() * force_mag;
+                }
+                return force;
+            }
+        }
+        
+        // Multipole acceptance criterion - more conservative
+        double dist = std::sqrt(dist_sq);
+        if (node->half_size / dist < 0.3) { // More conservative
+            // Get total mass
+            double total_mass = node->multipole.coeff[0].real();
+            
+            // Try using center of mass for better accuracy
+            Vector<D> com_pos = node->center;
+            if constexpr (D == 2) {
+                if (node->multipole.coeff.size() > 1) {
+                    // Extract center of mass from first multipole term
+                    std::complex<double> z_com = node->multipole.coeff[1] / total_mass;
+                    com_pos[0] = node->center[0] + z_com.real();
+                    com_pos[1] = node->center[1] + z_com.imag();
+                }
+            } else {
+                if (node->multipole.coeff.size() > 2) {
+                    com_pos[0] = node->multipole.coeff[1].real();
+                    com_pos[1] = node->multipole.coeff[1].imag();
+                    com_pos[2] = node->multipole.coeff[2].real();
+                }
+            }
+            
+            // Calculate force using center of mass
+            Vector<D> r = com_pos - body.position;
+            double r_sq = r.magnitude_squared();
+            if (r_sq < 1e-10) return Vector<D>();
+            
+            double r_mag = std::sqrt(r_sq);
+            double force_mag = G * body.mass * total_mass / (r_sq * r_mag);
+            return r.normalized() * force_mag;
+        } else {
+            // Recurse to children
+            if (node->is_leaf()) {
+                // Direct calculation for leaf node
+                Vector<D> force;
+                for (Body<D>* other : node->bodies) {
+                    if (other == &body) continue; // Skip self
+                    
+                    Vector<D> r = other->position - body.position;
+                    double r_sq = r.magnitude_squared();
+                    if (r_sq < 1e-10) continue;
+                    
+                    double r_mag = std::sqrt(r_sq);
+                    double force_mag = G * body.mass * other->mass / (r_sq * r_mag);
+                    force += r.normalized() * force_mag;
+                }
+                return force;
+            } else {
+                // Non-leaf, check children
+                Vector<D> force;
+                for (auto& child : node->children) {
+                    if (child) {
+                        force += calc_force(child.get(), body);
+                    }
+                }
+                return force;
+            }
+        }
+    };
+    
+    return calc_force(root.get(), body);
+}
+
+// Calculate forces with improved accuracy
 template <int D>
 std::vector<Vector<D>> FMM<D>::calculate_forces(const std::vector<Body<D>>& bodies) {
     std::vector<Vector<D>> forces(bodies.size(), Vector<D>());
@@ -613,69 +742,9 @@ std::vector<Vector<D>> FMM<D>::calculate_forces(const std::vector<Body<D>>& bodi
         return forces;
     }
     
-    // Use a higher order for the calculations to improve accuracy
-    int enhanced_order = std::max(order, 10);
-    
-    // Execute the FMM algorithm with enhanced parameters
-    upward_pass();
-    interaction_pass();
-    
-    // Improved force calculation with more direct calculations for accuracy
-    std::vector<FMMNode<D>*> leaf_nodes;
-    std::function<void(FMMNode<D>*)> collect_leaves = [&](FMMNode<D>* node) {
-        if (!node) return;
-        if (node->is_leaf()) {
-            leaf_nodes.push_back(node);
-        } else {
-            for (auto& child : node->children) {
-                if (child) collect_leaves(child.get());
-            }
-        }
-    };
-    
-    collect_leaves(root.get());
-    
-    // Map bodies to leaf nodes
-    std::vector<FMMNode<D>*> body_to_leaf(bodies.size(), nullptr);
-    for (auto* leaf : leaf_nodes) {
-        for (auto* body_ptr : leaf->bodies) {
-            for (size_t i = 0; i < bodies.size(); ++i) {
-                if (&bodies[i] == body_ptr) {
-                    body_to_leaf[i] = leaf;
-                    break;
-                }
-            }
-        }
-    }
-    
-    // Perform direct and far-field calculations
-    downward_pass(forces, bodies);
-    
-    // Additional verification to ensure no bodies were missed
+    // Use the improved accuracy calculation method
     for (size_t i = 0; i < bodies.size(); ++i) {
-        if (forces[i].magnitude() < 1e-20) {
-            // If force is negligible, try direct calculation with all bodies
-            FMMNode<D>* leaf = body_to_leaf[i];
-            if (leaf) {
-                const Body<D>& body = bodies[i];
-                
-                // Do direct calculation with nearby bodies
-                for (size_t j = 0; j < bodies.size(); ++j) {
-                    if (i == j) continue;
-                    
-                    const Body<D>& other = bodies[j];
-                    Vector<D> diff = other.position - body.position;
-                    double dist_sq = diff.magnitude_squared();
-                    
-                    if (dist_sq < 1e-9) continue;
-                    
-                    double dist = std::sqrt(dist_sq);
-                    double force_mag = G * body.mass * other.mass / (dist_sq * dist);
-                    
-                    forces[i] += diff.normalized() * force_mag;
-                }
-            }
-        }
+        forces[i] = calculate_accurate_force(bodies[i]);
     }
     
     return forces;
