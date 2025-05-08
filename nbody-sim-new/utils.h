@@ -18,12 +18,13 @@
 #include <parlay/primitives.h>  // For parlay::reduce
 
 // Physical constants
-const double G = 6.67430e-11;  // Gravitational constant
+const double G = 4.471e-21; // For distances in AU, masses in Earth masses  // Gravitational constant G= 6.67430e-11 m^3 kg^-1 s^-2
 const double BARNES_HUT_THETA = 0.25;  // Barnes-Hut approximation parameter
 const double EPSILON = 1e-11;  // Small value to avoid division by zero
 const double SOFTENING = 1e-6;  // Softening parameter for close interactions
 const double ACCURACY_PCT_THRESHOLD = 0.01;  // Threshold % for accuracy: if value is within 1% it is accurate
 const double ACCURACY_FORCE_THRESHOLD = 1e-20;  // Force threshold for accuracy checks
+const double MASS_THRESHOLD = 1e-10;
 
 // Complex number utilities
 inline std::complex<double> to_complex(const Vector<2>& v) {
@@ -109,9 +110,9 @@ inline std::vector<Body<D>> generate_random_bodies(int n) {
     std::mt19937 gen(rd());
     
     // Define distributions with the specified ranges
-    std::uniform_real_distribution<double> position_dist(0.0, 1000000.0);
+    std::uniform_real_distribution<double> position_dist(1, 10000000.0);
     std::uniform_real_distribution<double> velocity_dist(-10.0, 10.0);
-    std::uniform_real_distribution<double> mass_dist(10.0, 10000.0);
+    std::uniform_real_distribution<double> mass_dist(1, 100000000.0);
     
     // Reserve space for efficiency
     std::vector<Body<D>> bodies;
