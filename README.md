@@ -1,6 +1,6 @@
 # N-body Simulation Benchmark Suite
 
-This project implements and benchmarks various N-body simulation algorithms with sequential and parallel implementations. The simulation calculates gravitational forces between N bodies in either 2D or 3D space.
+This project implements and benchmarks various N-body simulation algorithms with sequential and parallel implementations in C++ and using CUDA. The simulation calculates gravitational forces between N bodies in either 2D or 3D space. Scripts to gather runtime performance metrics and analyze results and provide visualizations are provided.
 
 ## Algorithms Implemented
 
